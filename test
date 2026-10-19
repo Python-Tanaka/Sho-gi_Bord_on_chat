@@ -1,0 +1,572 @@
+//<iframe>やWebコンポーネントとして埋め込み、読者がページを移動することなくその場で局面を「前へ・次へ」と動かして観戦できるインタラクティブ将棋盤ウィジェットを作りたい。
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>将棋 埋め込み用インタラクティブ盤面ウィジェット</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .font-shogi {
+            font-family: 'Noto Serif JP', serif;
+        }
+        
+        /* Shogi Board Grid & Cell Aspect Ratios */
+        .shogi-board-grid {
+            display: grid;
+            grid-template-columns: repeat(9, minmax(0, 1fr));
+            background-color: #e3a857; /* Traditional Shogi Board Color */
+            border: 2px solid #5c3a21;
+            box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .shogi-cell {
+            aspect-ratio: 0.9 / 1; /* Shogi tiles are slightly taller than wide */
+            border: 0.5px solid rgba(92, 58, 33, 0.4);
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+        }
+
+        .shogi-cell:hover {
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .shogi-cell.last-move-target {
+            background-color: rgba(239, 68, 68, 0.25) !important;
+        }
+        .shogi-cell.last-move-source {
+            background-color: rgba(245, 158, 11, 0.2) !important;
+        }
+
+        /* Shogi Piece Styling */
+        .shogi-piece {
+            width: 88%;
+            height: 92%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: clamp(0.9rem, 2.8vw, 1.35rem);
+            font-weight: 700;
+            color: #1a0c00;
+            background: linear-gradient(145deg, #fce8cd 0%, #e8c697 100%);
+            border-radius: 2px 2px 4px 4px;
+            clip-path: polygon(20% 0%, 80% 0%, 100% 100%, 0% 100%);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+            transition: transform 0.15s ease;
+        }
+
+        /* Gote (Opponent) upside down */
+        .shogi-piece.gote {
+            transform: rotate(180deg);
+        }
+
+        .shogi-piece.promoted {
+            color: #b91c1c; /* Red text for promoted pieces */
+        }
+
+        /* Hand / Mochigoma Styling */
+        .hand-container {
+            background-color: #f7e2c4;
+            border: 1px solid #c8a370;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.08);
+        }
+
+        /* Custom Scrollbars */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col justify-center items-center p-2 sm:p-4">
+
+    <div id="app" class="w-full max-w-4xl bg-slate-800 border border-slate-700 rounded-xl shadow-2xl overflow-hidden flex flex-col md:flex-row">
+        
+        <!-- LEFT: Board and Hands Section -->
+        <div class="flex-1 p-3 sm:p-5 flex flex-col items-center justify-between border-b md:border-b-0 md:border-r border-slate-700 bg-slate-850">
+            
+            <!-- Gote (Top Player) Hand -->
+            <div class="w-full max-w-[420px] mb-2">
+                <div class="text-xs font-semibold text-slate-400 mb-1 flex justify-between items-center px-1">
+                    <span id="gote-name" class="truncate">☖ 後手</span>
+                    <span id="gote-captures-label" class="text-[11px] text-slate-500">持ち駒なし</span>
+                </div>
+                <div id="gote-hand" class="hand-container rounded-lg p-1.5 min-h-[44px] flex flex-wrap gap-1 items-center justify-start text-slate-900 font-shogi">
+                    <!-- Dynamic Gote Hand Pieces -->
+                </div>
+            </div>
+
+            <!-- Shogi Board Component -->
+            <div class="w-full max-w-[420px] relative my-1">
+                <!-- Board Coordinates Top/Right -->
+                <div class="grid grid-cols-9 text-center text-[10px] text-slate-400 mb-0.5 font-mono">
+                    <span>9</span><span>8</span><span>7</span><span>6</span><span>5</span><span>4</span><span>3</span><span>2</span><span>1</span>
+                </div>
+                <div class="shogi-board-grid rounded-sm overflow-hidden" id="shogi-board">
+                    <!-- 81 Cells rendered by JS -->
+                </div>
+            </div>
+
+            <!-- Sente (Bottom Player) Hand -->
+            <div class="w-full max-w-[420px] mt-2">
+                <div id="sente-hand" class="hand-container rounded-lg p-1.5 min-h-[44px] flex flex-wrap gap-1 items-center justify-start text-slate-900 font-shogi">
+                    <!-- Dynamic Sente Hand Pieces -->
+                </div>
+                <div class="text-xs font-semibold text-slate-400 mt-1 flex justify-between items-center px-1">
+                    <span id="sente-name" class="truncate">☗ 先手</span>
+                    <span id="sente-captures-label" class="text-[11px] text-slate-500">持ち駒なし</span>
+                </div>
+            </div>
+
+            <!-- Control Buttons Section -->
+            <div class="w-full max-w-[420px] mt-4 flex items-center justify-between gap-2">
+                <button id="btn-first" title="初手に戻る (Home / Ctrl+←)" class="flex-1 bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-slate-200 font-bold py-2 px-3 rounded-lg text-sm transition flex items-center justify-center">
+                    &laquo;
+                </button>
+                <button id="btn-prev" title="1手戻る (←)" class="flex-1 bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-slate-200 font-bold py-2 px-3 rounded-lg text-sm transition flex items-center justify-center">
+                    &lsaquo;
+                </button>
+                <div class="px-3 py-1 bg-slate-900 rounded-lg text-center font-mono text-sm font-semibold border border-slate-700 min-w-[70px]">
+                    <span id="current-move-num" class="text-amber-400">0</span> <span class="text-xs text-slate-500">/ <span id="total-moves-num">0</span></span>
+                </div>
+                <button id="btn-next" title="1手進む (→)" class="flex-1 bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-slate-200 font-bold py-2 px-3 rounded-lg text-sm transition flex items-center justify-center">
+                    &rsaquo;
+                </button>
+                <button id="btn-last" title="最新手に進む (End / Ctrl+→)" class="flex-1 bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-slate-200 font-bold py-2 px-3 rounded-lg text-sm transition flex items-center justify-center">
+                    &raquo;
+                </button>
+            </div>
+        </div>
+
+        <!-- RIGHT: Move History & Information Section -->
+        <div class="w-full md:w-72 lg:w-80 p-4 flex flex-col justify-between bg-slate-900/50">
+            <div>
+                <!-- Header -->
+                <div class="flex items-center justify-between border-b border-slate-700 pb-2 mb-3">
+                    <h2 class="text-sm font-bold text-slate-200 flex items-center gap-1.5">
+                        <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                        棋譜リスト
+                    </h2>
+                    <span id="last-move-text" class="text-xs text-amber-400 font-shogi truncate max-w-[120px]">開始局面</span>
+                </div>
+
+                <!-- Move List Container -->
+                <div id="move-list-container" class="h-48 md:h-64 overflow-y-auto custom-scrollbar bg-slate-950/60 rounded-lg p-1.5 border border-slate-800 text-xs font-mono">
+                    <!-- Moves generated by JS -->
+                </div>
+            </div>
+
+            <!-- Embed Code Generator & Instructions -->
+            <div class="mt-4 pt-3 border-t border-slate-800">
+                <button id="toggle-embed-btn" class="w-full py-1.5 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md text-xs text-slate-300 font-medium flex items-center justify-center gap-1.5 transition">
+                    <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
+                    ブログ埋め込みコードを取得
+                </button>
+
+                <!-- Hidden Embed Box -->
+                <div id="embed-box" class="hidden mt-2 p-2 bg-slate-950 rounded border border-slate-800 text-[11px]">
+                    <p class="text-slate-400 mb-1">iframeコード (Note/Qiita/ブログ等):</p>
+                    <textarea id="embed-code-text" readonly class="w-full h-16 bg-slate-900 border border-slate-700 rounded p-1 text-slate-300 font-mono text-[10px] resize-none focus:outline-none focus:border-amber-500"></textarea>
+                    <button id="copy-embed-btn" class="w-full mt-1.5 py-1 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold rounded text-[11px] transition">
+                        コードをコピー
+                    </button>
+                </div>
+                <div id="toast-message" class="hidden text-center text-[11px] text-emerald-400 mt-1 font-semibold">
+                    クリップボードにコピーしました！
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- CONSTANTS & MAPS ---
+        const PIECE_NAMES = {
+            'P': '歩', 'L': '香', 'N': '桂', 'S': '銀', 'G': '金', 'B': '角', 'R': '飛', 'K': '玉',
+            '+P': 'と', '+L': '成香', '+N': '成桂', '+S': '成銀', '+B': '馬', '+R': '龍'
+        };
+
+        const NUM_TO_KANJI_POS = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
+        const NUM_TO_ZENKAKU = ['０', '１', '２', '３', '４', '５', '６', '７', '８', '９'];
+
+        // Sample SFEN Game Record (Yagura opening sequence) if none provided in URL
+        const DEFAULT_MOVES_SFEN = [
+            "7g7f", "3c3d", "2g2f", "4c4d", "2f2e", "2b3c", "3g3f", "8b2b", "7i6h", "7a6b",
+            "6h7g", "5c5d", "5g5f", "3a4b", "4i3h", "3a3b", "3h2g", "1c1d", "1g1f", "6a5b"
+        ];
+
+        // --- STATE MANAGEMENT ---
+        class ShogiState {
+            constructor() {
+                this.resetToHirate();
+            }
+
+            resetToHirate() {
+                // 9x9 board representation (row 0 to 8, col 0 to 8)
+                // Uppercase = Sente (☗), Lowercase = Gote (☖)
+                this.board = [
+                    ['l', 'n', 's', 'g', 'k', 'g', 's', 'n', 'l'],
+                    ['',  'r', '',  '',  '',  '',  '',  'b', '' ],
+                    ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
+                    ['',  '',  '',  '',  '',  '',  '',  '',  '' ],
+                    ['',  '',  '',  '',  '',  '',  '',  '',  '' ],
+                    ['',  '',  '',  '',  '',  '',  '',  '',  '' ],
+                    ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
+                    ['',  'B', '',  '',  '',  '',  '',  'R', '' ],
+                    ['L', 'N', 'S', 'G', 'K', 'G', 'S', 'N', 'L']
+                ];
+
+                this.hands = {
+                    sente: { P:0, L:0, N:0, S:0, G:0, B:0, R:0 },
+                    gote: { p:0, l:0, n:0, s:0, g:0, b:0, r:0 }
+                };
+
+                this.turn = 'sente'; // 'sente' or 'gote'
+            }
+
+            // Apply CSA/SFEN move string like "7g7f" or "P*5e"
+            applyMoveStr(moveStr) {
+                if (moveStr.includes('*')) {
+                    // Drop move (e.g., P*5e)
+                    const pieceType = moveStr[0];
+                    const targetCol = 9 - parseInt(moveStr[2]);
+                    const targetRow = moveStr[3].charCodeAt(0) - 'a'.charCodeAt(0);
+
+                    const isSente = this.turn === 'sente';
+                    const key = isSente ? pieceType.toUpperCase() : pieceType.toLowerCase();
+
+                    this.board[targetRow][targetCol] = key;
+                    if (isSente) {
+                        this.hands.sente[key]--;
+                    } else {
+                        this.hands.gote[key]--;
+                    }
+                } else {
+                    // Normal move (e.g., 7g7f or 2b3c+)
+                    const srcCol = 9 - parseInt(moveStr[0]);
+                    const srcRow = moveStr[1].charCodeAt(0) - 'a'.charCodeAt(0);
+                    const dstCol = 9 - parseInt(moveStr[2]);
+                    const dstRow = moveStr[3].charCodeAt(0) - 'a'.charCodeAt(0);
+                    const isPromote = moveStr.endsWith('+');
+
+                    let piece = this.board[srcRow][srcCol];
+                    this.board[srcRow][srcCol] = '';
+
+                    // Capture target if exists
+                    const captured = this.board[dstRow][dstCol];
+                    if (captured) {
+                        let unpromoted = captured.replace('+', '');
+                        if (this.turn === 'sente') {
+                            this.hands.sente[unpromoted.toUpperCase()]++;
+                        } else {
+                            this.hands.gote[unpromoted.toLowerCase()]++;
+                        }
+                    }
+
+                    // Promotion logic
+                    if (isPromote) {
+                        piece = '+' + piece;
+                    }
+
+                    this.board[dstRow][dstCol] = piece;
+                }
+
+                // Switch turn
+                this.turn = (this.turn === 'sente') ? 'gote' : 'sente';
+            }
+        }
+
+        // --- APP CONTROLLER ---
+        class ShogiWidgetApp {
+            constructor() {
+                this.moveHistory = [];
+                this.currentMoveIndex = 0;
+                this.boardHistory = []; // Stores states for instant rewind/forward
+                this.lastMoveDetails = null;
+
+                this.initDOM();
+                this.parseURLParams();
+                this.buildMoveHistoryStates();
+                this.bindEvents();
+                this.render();
+            }
+
+            initDOM() {
+                this.domBoard = document.getElementById('shogi-board');
+                this.domSenteHand = document.getElementById('sente-hand');
+                this.domGoteHand = document.getElementById('gote-hand');
+                this.domMoveList = document.getElementById('move-list-container');
+                this.domCurrentMove = document.getElementById('current-move-num');
+                this.domTotalMoves = document.getElementById('total-moves-num');
+                this.domLastMoveText = document.getElementById('last-move-text');
+                this.domEmbedBox = document.getElementById('embed-box');
+                this.domEmbedCodeText = document.getElementById('embed-code-text');
+                this.domToast = document.getElementById('toast-message');
+            }
+
+            parseURLParams() {
+                let movesString = "";
+
+                // Check URL Hash (#moves=7g7f,3c3d...) or Query parameter (?moves=...)
+                const hash = window.location.hash.substring(1);
+                const queryParams = new URLSearchParams(window.location.search);
+
+                if (hash.startsWith('moves=')) {
+                    movesString = hash.replace('moves=', '');
+                } else if (queryParams.get('moves')) {
+                    movesString = queryParams.get('moves');
+                }
+
+                if (movesString) {
+                    this.moveHistory = movesString.split(',').filter(m => m.trim().length > 0);
+                } else {
+                    this.moveHistory = [...DEFAULT_MOVES_SFEN];
+                }
+            }
+
+            // Pre-calculate board state for each move step
+            buildMoveHistoryStates() {
+                const state = new ShogiState();
+                this.boardHistory = [JSON.parse(JSON.stringify(state))];
+
+                for (const moveStr of this.moveHistory) {
+                    state.applyMoveStr(moveStr);
+                    this.boardHistory.push(JSON.parse(JSON.stringify(state)));
+                }
+
+                this.domTotalMoves.innerText = this.moveHistory.length;
+            }
+
+            bindEvents() {
+                document.getElementById('btn-first').addEventListener('click', () => this.goToMove(0));
+                document.getElementById('btn-prev').addEventListener('click', () => this.stepMove(-1));
+                document.getElementById('btn-next').addEventListener('click', () => this.stepMove(1));
+                document.getElementById('btn-last').addEventListener('click', () => this.goToMove(this.moveHistory.length));
+
+                // Keyboard controls
+                window.addEventListener('keydown', (e) => {
+                    if (e.key === 'ArrowLeft') {
+                        if (e.ctrlKey || e.metaKey) this.goToMove(0);
+                        else this.stepMove(-1);
+                    } else if (e.key === 'ArrowRight') {
+                        if (e.ctrlKey || e.metaKey) this.goToMove(this.moveHistory.length);
+                        else this.stepMove(1);
+                    } else if (e.key === 'Home') {
+                        this.goToMove(0);
+                    } else if (e.key === 'End') {
+                        this.goToMove(this.moveHistory.length);
+                    }
+                });
+
+                // Toggle Embed Code Box
+                document.getElementById('toggle-embed-btn').addEventListener('click', () => {
+                    this.domEmbedBox.classList.toggle('hidden');
+                    if (!this.domEmbedBox.classList.contains('hidden')) {
+                        this.updateEmbedCode();
+                    }
+                });
+
+                // Copy Embed Code Button
+                document.getElementById('copy-embed-btn').addEventListener('click', () => {
+                    this.domEmbedCodeText.select();
+                    document.execCommand('copy');
+                    
+                    this.domToast.classList.remove('hidden');
+                    setTimeout(() => {
+                        this.domToast.classList.add('hidden');
+                    }, 2500);
+                });
+            }
+
+            stepMove(delta) {
+                const target = this.currentMoveIndex + delta;
+                if (target >= 0 && target <= this.moveHistory.length) {
+                    this.goToMove(target);
+                }
+            }
+
+            goToMove(index) {
+                if (index < 0 || index > this.moveHistory.length) return;
+                this.currentMoveIndex = index;
+                this.render();
+            }
+
+            // Format move string into Japanese Shogi notation (e.g., ☗７六歩)
+            formatJapaneseMove(moveStr, index) {
+                if (!moveStr) return "開始局面";
+                const isSente = (index % 2 !== 0);
+                const mark = isSente ? "☗" : "☖";
+
+                if (moveStr.includes('*')) {
+                    const p = moveStr[0].toUpperCase();
+                    const col = moveStr[2];
+                    const rowKanji = NUM_TO_KANJI_POS[moveStr[3].charCodeAt(0) - 'a'.charCodeAt(0)];
+                    return `${mark}${col}${rowKanji}${PIECE_NAMES[p]}打`;
+                }
+
+                const dstCol = moveStr[2];
+                const dstRowKanji = NUM_TO_KANJI_POS[moveStr[3].charCodeAt(0) - 'a'.charCodeAt(0)];
+                const isPromote = moveStr.endsWith('+');
+
+                // Determine piece moving
+                const prevState = this.boardHistory[index - 1];
+                const srcCol = 9 - parseInt(moveStr[0]);
+                const srcRow = moveStr[1].charCodeAt(0) - 'a'.charCodeAt(0);
+                let pieceKey = prevState.board[srcRow][srcCol].replace('+', '').toUpperCase();
+
+                let pieceName = PIECE_NAMES[pieceKey] || '駒';
+                let promoteSuffix = isPromote ? '成' : '';
+
+                return `${mark}${dstCol}${dstRowKanji}${pieceName}${promoteSuffix}`;
+            }
+
+            render() {
+                const currentState = this.boardHistory[this.currentMoveIndex];
+                this.domCurrentMove.innerText = this.currentMoveIndex;
+
+                // Parse last move for highlighting
+                let lastMoveSrc = null;
+                let lastMoveDst = null;
+                if (this.currentMoveIndex > 0) {
+                    const lastMoveStr = this.moveHistory[this.currentMoveIndex - 1];
+                    this.domLastMoveText.innerText = `${this.currentMoveIndex}手: ${this.formatJapaneseMove(lastMoveStr, this.currentMoveIndex)}`;
+                    
+                    if (!lastMoveStr.includes('*')) {
+                        lastMoveSrc = {
+                            col: 9 - parseInt(lastMoveStr[0]),
+                            row: lastMoveStr[1].charCodeAt(0) - 'a'.charCodeAt(0)
+                        };
+                    }
+                    lastMoveDst = {
+                        col: 9 - parseInt(lastMoveStr[2]),
+                        row: lastMoveStr[3].charCodeAt(0) - 'a'.charCodeAt(0)
+                    };
+                } else {
+                    this.domLastMoveText.innerText = "開始局面";
+                }
+
+                // 1. Render 9x9 Board
+                this.domBoard.innerHTML = '';
+                for (let r = 0; r < 9; r++) {
+                    for (let c = 0; c < 9; c++) {
+                        const cell = document.createElement('div');
+                        cell.className = 'shogi-cell font-shogi';
+
+                        // Highlight source/target cells of last move
+                        if (lastMoveDst && lastMoveDst.row === r && lastMoveDst.col === c) {
+                            cell.classList.add('last-move-target');
+                        } else if (lastMoveSrc && lastMoveSrc.row === r && lastMoveSrc.col === c) {
+                            cell.classList.add('last-move-source');
+                        }
+
+                        const pieceVal = currentState.board[r][c];
+                        if (pieceVal) {
+                            const pieceEl = document.createElement('div');
+                            const isGote = (pieceVal === pieceVal.toLowerCase() && !pieceVal.startsWith('+')) || 
+                                           (pieceVal.startsWith('+') && pieceVal[1] === pieceVal[1].toLowerCase());
+                            
+                            const cleanKey = pieceVal.toUpperCase();
+                            const isPromoted = pieceVal.startsWith('+');
+
+                            pieceEl.className = `shogi-piece ${isGote ? 'gote' : ''} ${isPromoted ? 'promoted' : ''}`;
+                            pieceEl.innerText = PIECE_NAMES[cleanKey] || '';
+                            cell.appendChild(pieceEl);
+                        }
+
+                        this.domBoard.appendChild(cell);
+                    }
+                }
+
+                // 2. Render Hands (Mochigoma)
+                this.renderHand(this.domSenteHand, currentState.hands.sente, false);
+                this.renderHand(this.domGoteHand, currentState.hands.gote, true);
+
+                // 3. Render Move History Sidebar
+                this.domMoveList.innerHTML = '';
+                const startRow = document.createElement('div');
+                startRow.className = `p-1.5 rounded cursor-pointer transition flex justify-between ${this.currentMoveIndex === 0 ? 'bg-amber-500/20 text-amber-300 font-bold' : 'hover:bg-slate-800 text-slate-400'}`;
+                startRow.innerText = '0. 開始局面';
+                startRow.addEventListener('click', () => this.goToMove(0));
+                this.domMoveList.appendChild(startRow);
+
+                this.moveHistory.forEach((mStr, idx) => {
+                    const stepNum = idx + 1;
+                    const row = document.createElement('div');
+                    row.className = `p-1.5 rounded cursor-pointer transition flex justify-between items-center ${this.currentMoveIndex === stepNum ? 'bg-amber-500/20 text-amber-300 font-bold border-l-2 border-amber-500' : 'hover:bg-slate-800 text-slate-300'}`;
+                    
+                    const moveText = this.formatJapaneseMove(mStr, stepNum);
+                    row.innerHTML = `<span>${stepNum}. ${moveText}</span> <span class="text-[10px] text-slate-500 font-mono">${mStr}</span>`;
+                    
+                    row.addEventListener('click', () => this.goToMove(stepNum));
+                    this.domMoveList.appendChild(row);
+
+                    // Auto-scroll move list to keep current move visible
+                    if (this.currentMoveIndex === stepNum) {
+                        row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                    }
+                });
+
+                this.updateEmbedCode();
+            }
+
+            renderHand(container, handObj, isGote) {
+                container.innerHTML = '';
+                let hasPieces = false;
+
+                const pieceOrder = ['R', 'B', 'G', 'S', 'N', 'L', 'P'];
+                for (const p of pieceOrder) {
+                    const count = handObj[p] || 0;
+                    if (count > 0) {
+                        hasPieces = true;
+                        const badge = document.createElement('div');
+                        badge.className = 'px-1.5 py-0.5 bg-amber-100 border border-amber-300 rounded shadow-sm text-xs font-bold flex items-center gap-0.5';
+                        const pieceLabel = PIECE_NAMES[p];
+                        badge.innerHTML = `<span class="${isGote ? 'inline-block transform rotate-180' : ''}">${pieceLabel}</span>${count > 1 ? `<span class="text-[10px] text-amber-800">×${count}</span>` : ''}`;
+                        container.appendChild(badge);
+                    }
+                }
+
+                if (!hasPieces) {
+                    container.innerHTML = `<span class="text-xs text-amber-900/40 italic pl-1">なし</span>`;
+                }
+            }
+
+            updateEmbedCode() {
+                const baseURL = window.location.href.split('#')[0].split('?')[0];
+                const movesParam = this.moveHistory.join(',');
+                const shareableURL = `${baseURL}#moves=${movesParam}`;
+                const iframeCode = `<iframe src="${shareableURL}" width="100%" height="520" frameborder="0" scrolling="no" allowfullscreen style="border-radius: 12px; overflow: hidden; border: 1px solid #334155;"></iframe>`;
+                
+                this.domEmbedCodeText.value = iframeCode;
+            }
+        }
+
+        // Initialize App on DOM Ready
+        window.addEventListener('DOMContentLoaded', () => {
+            new ShogiWidgetApp();
+        });
+    </script>
+</body>
+</html>
